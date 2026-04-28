@@ -9,6 +9,7 @@
 #include <TFile.h>
 #include <TTree.h>
 #include "ANNIEEventReader.h"
+#include "MCLAPPDHitReader.h"
 #include "LAPPDMetaReader.h"
 #include "TankClusterReader.h"
 #include "MRDClusterReader.h"
@@ -18,12 +19,11 @@
 #include "INIReader.h"
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
-
+//This function is for mrdTrackReconstructed cut
 void ReadChannels(const std::string& filename,
                   std::vector<int>& verticalChannels,
                   std::vector<int>& horizontalChannels);
  
-
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
@@ -58,14 +58,13 @@ void FilterCCEvent(const INIReader& iniReader)
    std::string outputFileName = iniReader.Get("output", "rootFile", "");
    const bool useMC           = iniReader.GetBoolean("input", "useMC", false);
    
-   const bool cutRequireLAPPDMeta      = iniReader.GetBoolean("cuts", "requireLAPPDMeta", true);
-   const bool cutUseSelectedLAPPD      = iniReader.GetBoolean("cuts", "useSelectedLAPPD", false);
-   const int  selectedLAPPDID          = iniReader.GetInteger("cuts", "selectedLAPPDID", -1);
-
+   //data only
+   const bool cutRequireLAPPD      = iniReader.GetBoolean("cuts", "requireLAPPD", true);
    const bool cutBeamOK                = (!useMC) && iniReader.GetBoolean("cuts", "beamOK", true);
    const bool cutBRFWindow             = (!useMC) && iniReader.GetBoolean("cuts", "brfWindow", false);
    const bool cutPPSMissing            = (!useMC) && iniReader.GetBoolean("cuts", "ppsMissing", false);
 
+   //for both mc and data
    const bool cutPairedEvent           = iniReader.GetBoolean("cuts", "pairedEvent", true);
    const bool cutPromptPMTCluster      = iniReader.GetBoolean("cuts", "promptPMTCluster", true);
    const bool cutHighQualityPMTCluster = iniReader.GetBoolean("cuts", "highQualityPMTCluster", true);
@@ -130,13 +129,17 @@ void FilterCCEvent(const INIReader& iniReader)
       tree->SetBranchAddress("BRFFirstPeakFit", &BRFFirstPeakFit);
    }
 
+
    // Initialize readers
-   LAPPDMetaReader metaReader;
-
-   if (!useMC) {
+   MCLAPPDHitReader mcLAPPDHitReader;
+   LAPPDMetaReader metaReader;    
+   
+   if(useMC)
+      mcLAPPDHitReader.Init(tree);
+   else
       metaReader.Init(tree);
-   }
-
+ 
+ 
    ANNIEEventReader eventReader; 
    eventReader.Init(tree);
 
@@ -161,64 +164,68 @@ void FilterCCEvent(const INIReader& iniReader)
       
       tree->GetEntry(i);
       
-      //Skipped events 1 
-      //No need to look at this event if no lappd data
-      if (cutRequireLAPPDMeta && metaReader.mLAPPD_ID->size() == 0) {
-         continue;
-      }
-      
-      //Skipped events 2
-      //No need to look at this event if beam is not ok
-      if (cutBeamOK && !beam_ok) {
-          continue;
-      }
-      
-      //Skipped events 3
-      //No need to look at this event if brf is not ok
-      if (cutBRFWindow) {
-         double brf_us = BRFFirstPeakFit / 1000.0;
+      // ------------------------------------------------------------
+      // 1) Require LAPPD both for mc and  data
+      // ------------------------------------------------------------
+      if (cutRequireLAPPD) {
 
-         if (brf_us < brfMin || brf_us > brfMax) {
-            continue;
+         if (useMC) {
+            EMCLAPPDHits eMCLAPPDHits;
+            mcLAPPDHitReader.ReadEntry(i, eMCLAPPDHits);
+
+            if (eMCLAPPDHits.GetHits().empty()) 
+               continue;
          }
-      } 
-      
-      //Skipped events 4
-      // No need to look at this event if selected LAPPD has no data
-      if (cutUseSelectedLAPPD) {
-         auto ite = std::find(metaReader.mLAPPD_ID->begin(),
-                              metaReader.mLAPPD_ID->end(),
-                              selectedLAPPDID);
-
-         if (ite == metaReader.mLAPPD_ID->end()) {
-            continue;
+         else {
+            if (metaReader.mLAPPD_ID->empty()) 
+               continue;
          }
       }
-      
-         
-      //Skipped events 5
-      // 3. PPS missing check. if there is a missing PPS, it will be 1 in the vector. 
-      // All should be zero!
-      // No need to look at this event if PPS missing
-      if (!useMC && cutPPSMissing) {
 
-         bool hasPPSMissing = false;
 
-         for (size_t j = 0; j < metaReader.mLAPPD_TSPPSMissing->size(); ++j) {
-            if (metaReader.mLAPPD_TSPPSMissing->at(j) != 0) {
-               hasPPSMissing = true;
-               break;
+      // ------------------------------------------------------------
+      // 2) Data-only cuts,quality cuts
+      // ------------------------------------------------------------
+      if (!useMC) {
+
+         // Beam OK
+         if (cutBeamOK && !beam_ok) {
+            continue;
+         }
+
+         // BRF window
+         if (cutBRFWindow) {
+            double brf_us = BRFFirstPeakFit / 1000.0;
+
+            if (brf_us < brfMin || brf_us > brfMax) {
+               continue;
             }
          }
 
-         if (hasPPSMissing) {
-            continue;
+         
+         // PPS missing
+         if (cutPPSMissing) {
+            bool hasPPSMissing = false;
+
+            for (size_t j = 0; j < metaReader.mLAPPD_TSPPSMissing->size(); ++j) {
+               if (metaReader.mLAPPD_TSPPSMissing->at(j) != 0) {
+                  hasPPSMissing = true;
+                  break;
+               }
+            }
+
+            if (hasPPSMissing) {
+               continue;
+            }
          }
+      
       }
+      
+      
  
   
       //------------------------------------------------------------------------
-      // The belows are Event-level cuts
+      // The belows are Event-level physics cuts
       ETankClusters eTankClusters;
       tankClusterReader.ReadEntry(i, eTankClusters);
 
@@ -263,9 +270,6 @@ void FilterCCEvent(const INIReader& iniReader)
          }
            
       }
-     
-      //std::cout<<"The higest PE number in all clusters: "<<maxPENumber<<std::endl;
-       
      
       // Cut 2: High-quality PMT cluster
       // Check if the previously selected cluster is a high-quality PMT cluster
@@ -421,6 +425,7 @@ void FilterCCEvent(const INIReader& iniReader)
       if (cutNoVeto)
          passedAllCuts = passedAllCuts && noVeto;
 
+      //final
       if (passedAllCuts) {
          outputTree->Fill();
          ++nPassedEvents;
