@@ -22,42 +22,37 @@
 #include <algorithm>
 #include <fstream>
 #include <sstream>
-
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
+
+void ReadChannels(const std::string& filename,
+                  std::vector<int>& verticalChannels,
+                  std::vector<int>& horizontalChannels);
+
+
+//Functions used
 void PlotTimestampMinusBeamgate(const char* fileName);
-
-//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+std::string GetBaseName(const std::string& fileName);
+bool IsHighQualityPMTCluster(const TankCluster*);
 
 void GenerateTable(TH1D* hist, double& signal_counts, 
                         double& estimated_bck_in_signal, 
                         double& SoverB);
-
-//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
                         
 std::string int128_to_string(__int128 value);
 
 
-//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
+// -----------------------------
+// Helpers
+// -----------------------------
 static inline __int128 to_i128(uint64_t x) { return static_cast<__int128>(x); }
-
-//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
-
 static inline __int128 to_i128(int64_t  x) { return static_cast<__int128>(x); }
-
-//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
-
 static inline __int128 to_i128(int  x) { return static_cast<__int128>(x); }
-
-//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
-
 // 1 tick = 3.125 ns = 3125 ps (EXACT)
 static inline __int128 ticks_to_ps_i128(__int128 ticks) {
   return ticks * 3125;
 }
-
-//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
 // BG_unix(ps) = (BG_raw + BG_corr)*3125ps + Offset_ns*1000 - OSInMinusPS_ps
 static __int128 compute_BG_unix_ps(
@@ -73,7 +68,6 @@ static __int128 compute_BG_unix_ps(
   return ps_from_ticks + ps_offset - ps_os;
 }
 
-//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
 static __int128 compute_TS_unix_ps(
     uint64_t TS_raw,
@@ -118,36 +112,36 @@ void PlotTimestampMinusBeamgate(const char* fileName)
    
    TTree* tree = treeReader.GetTree(); 
    
-   int passBeamOK                = -1;
-   int passBRFWindow             = -1;
-   int passPPSMissing            = -1;
-   int passRequireLAPPD          = -1;
-   int passPairedEvent           = -1;
-   int passPromptPMTCluster      = -1;
-   int passHighQualityPMTCluster = -1;
-   int passMRDTrackReconstructed = -1;
-   int passTankMRDCoinc          = -1;
-   int passMuonTopology          = -1;
-   int passNoVeto                = -1;
+   
+   int beam_ok;
+   tree->SetBranchAddress("beam_ok", &beam_ok);
+   
+   double BRFFirstPeakFit;
+   tree->SetBranchAddress("BRFFirstPeakFit", &BRFFirstPeakFit);
 
-   tree->SetBranchAddress("passBeamOK",                &passBeamOK);
-   tree->SetBranchAddress("passBRFWindow",             &passBRFWindow);
-   tree->SetBranchAddress("passPPSMissing",            &passPPSMissing);
-   tree->SetBranchAddress("passRequireLAPPD",          &passRequireLAPPD);
-   tree->SetBranchAddress("passPairedEvent",           &passPairedEvent);
-   tree->SetBranchAddress("passPromptPMTCluster",      &passPromptPMTCluster);
-   tree->SetBranchAddress("passHighQualityPMTCluster", &passHighQualityPMTCluster);
-   tree->SetBranchAddress("passMRDTrackReconstructed", &passMRDTrackReconstructed);
-   tree->SetBranchAddress("passTankMRDCoinc",          &passTankMRDCoinc);
-   tree->SetBranchAddress("passMuonTopology",          &passMuonTopology);
-   tree->SetBranchAddress("passNoVeto",                &passNoVeto);
-   
-   
    // Initialize readers
    LAPPDMetaReader metaReader; 
    metaReader.Init(tree);
 
+   ANNIEEventReader eventReader; 
+   eventReader.Init(tree);
+
+   TankClusterReader tankClusterReader;
+   tankClusterReader.Init(tree);
    
+   MRDClusterReader mrdClusterReader;
+   mrdClusterReader.Init(tree);
+
+
+   //For MRDtrackReconstructed cut
+   std::vector<int> sideMRDPMTs;
+   std::vector<int> topMRDPMTs;
+   ReadChannels("MRDInfo.txt", sideMRDPMTs, topMRDPMTs);
+
+      //std::cout << "Vertical size: " << sideMRDPMTs.size() << std::endl;
+      //std::cout << "Horizontal size: " << topMRDPMTs.size() << std::endl;
+
+
    // Get entry count
    Long64_t nEntries = tree->GetEntries();
    std::cout << "Number of events in this tree: " << nEntries << std::endl;
@@ -161,6 +155,8 @@ void PlotTimestampMinusBeamgate(const char* fileName)
    TH1D* h5   = new TH1D("Muon topology cut", "",   160, 0, 20000);
    TH1D* h6   = new TH1D("No hit in FMV", "",   160, 0, 20000);
    
+
+
    std::map<int, long long> lappdCounts;   // ID -> kaç kez görüldü
 
    int selectedLAPPDID = -1;  // -1 means all active
@@ -178,15 +174,14 @@ void PlotTimestampMinusBeamgate(const char* fileName)
       for (int id : *metaReader.mLAPPD_ID)
          lappdCounts[id]++;
       
+      //Skipped events 1 
+      //just to increase speed. no impact 
+      if (metaReader.mLAPPD_ID->size() == 0) //no lappd meta data
+      {
+         //throw std::runtime_error("mLAPPD_ID->size() returned to zero");
+         continue; 
+      }
       
-      if (passBeamOK == 0)
-         continue;
-
-      if (passPPSMissing == 0)
-         continue;
-         
-      if (passBRFWindow == 0)
-         continue;
       
       //Skipped events 2
       //it works only if one LAPPD is active
@@ -205,6 +200,214 @@ void PlotTimestampMinusBeamgate(const char* fileName)
       }
       
                   
+      //Skipped events 3
+      if (!beam_ok)
+         continue;      
+        
+      /*
+      //Skipped events 4
+      if ( (BRFFirstPeakFit/1000.) < 5 or (BRFFirstPeakFit/1000. ) > 30 )
+      {
+         //throw std::runtime_error("BRF passed");
+         continue;
+         
+      }
+      */
+         
+       
+      //Skipped events 5
+      // 3. PPS missing check. if there is a missing PPS, it will be 1 in the vector. All should be zero!
+      bool hasPPSMissing = false;
+
+      for (size_t i = 0; i < metaReader.mLAPPD_TSPPSMissing->size(); ++i) {
+          if (metaReader.mLAPPD_TSPPSMissing->at(i) != 0) {
+              hasPPSMissing = true;
+              break;  // ilk bulduğunda çık (daha hızlı)
+          }
+      }
+
+      if (hasPPSMissing) {
+          continue;
+      }
+      
+      
+      
+      //------------------------------------------------------------------------
+      // The belows are Event-level cuts
+      ETankClusters eTankClusters;
+      tankClusterReader.ReadEntry(i, eTankClusters);
+
+      EMRDClusters eMRDClusters;
+      mrdClusterReader.ReadEntry(i, eMRDClusters);
+            
+      // Cut 0: Paired
+      bool isPairedEvent = false;
+      if (eventReader.HasLAPPD() == 1 && 
+          eventReader.HasMRD()   == 1   && 
+          eventReader.HasTank()  == 1 )
+      {
+         
+         isPairedEvent = true;
+      }
+         
+      
+      // Cut 1: Any PMT cluster 
+      // Find the cluster with the maximum charge (PE) in the initial time window
+      bool hasClusterInPromptWindow = false;
+      double maxPENumber = -1.0;
+
+      const TankCluster* clusterPtrWithMaxPE = nullptr;
+      for (const TankCluster& cl : eTankClusters.Get() )
+      {
+         
+         if (cl.GetClusterTime() < 2000.0) //initial window
+         {
+          
+            hasClusterInPromptWindow = true;
+
+            if (cl.GetMaxPE() > maxPENumber) 
+            {
+                maxPENumber  = cl.GetMaxPE();
+                clusterPtrWithMaxPE = &cl;
+            }
+            
+            //std::cout<<"Max PE in this cluster : "<<cl.GetMaxPE()<<std::endl;
+            //for(const PMTHit& hit: cl.GetHits())
+            //std::cout<<hit.GetPE()<<std::endl;
+                  
+         }
+           
+      }
+     
+      //std::cout<<"The higest PE number in all clusters: "<<maxPENumber<<std::endl;
+       
+     
+      // Cut 2: High-quality PMT cluster
+      // Check if the previously selected cluster is a high-quality PMT cluster
+      bool highQualityCluster = false;   
+      if (hasClusterInPromptWindow && clusterPtrWithMaxPE )
+      {
+         
+         if (clusterPtrWithMaxPE->GetChargeBalance() < 0.2)
+            highQualityCluster = true;
+      }
+         
+
+      // Cut 3: MRD track reconstructed
+      bool mrdTrackReconstructed = false;
+
+      for (const MRDCluster& cluster : eMRDClusters.Get()) {
+
+         // Her hit için: (time, type)
+         // type: 0 -> side, 1 -> top, -1 -> ilgisiz
+         std::vector<std::pair<double, int>> taggedHits;
+
+         for (const MRDHit& hit : cluster.GetHits()) {
+
+            int chankey = hit.GetChankey();
+            double time = hit.GetTime();
+
+            if (std::find(sideMRDPMTs.begin(), sideMRDPMTs.end(), chankey) != sideMRDPMTs.end()) {
+               taggedHits.emplace_back(time, 0);
+            }
+            else if (std::find(topMRDPMTs.begin(), topMRDPMTs.end(), chankey) != topMRDPMTs.end()) {
+               taggedHits.emplace_back(time, 1);
+            }
+         }
+
+         if (taggedHits.size() < 4) continue;
+
+         // Zamana göre sırala
+         std::sort(taggedHits.begin(), taggedHits.end(),
+                   [](const auto& a, const auto& b) {
+                      return a.first < b.first;
+                   });
+
+         // Sliding window
+         for (size_t i = 0; i < taggedHits.size(); ++i) {
+
+            int nSideHits = 0;
+            int nTopHits  = 0;
+
+            for (size_t j = i; j < taggedHits.size(); ++j) {
+
+               double dt = taggedHits[j].first - taggedHits[i].first;
+
+               if (dt > 30.0) break;
+
+               if (taggedHits[j].second == 0) ++nSideHits;
+               else if (taggedHits[j].second == 1) ++nTopHits;
+
+               if (nSideHits >= 2 && nTopHits >= 2) {
+                  mrdTrackReconstructed = true;
+                  break;
+               }
+            }
+
+            if (mrdTrackReconstructed) break;
+         }
+
+         if (mrdTrackReconstructed) break;  // bir cluster yeterli
+      }
+      
+      
+      
+      
+      
+      // Cut 4: In-time MRD coincidence
+      bool tankMRDCoinc = false;
+      if (eventReader.GetTankMRDCoinc() == 1)
+         tankMRDCoinc = true;
+      
+      
+      //Cut 5: Muon topology cut
+      bool muonTopology = false;
+      
+      //neigbors of lappd 39
+      std::vector<int> pmtIDs {462, 428, 406, 412};
+      //std::vector<int> pmtIDs {383, 389, 440, 441};
+
+      std::unordered_map<int, bool> passed;
+      for (int id : pmtIDs) 
+         passed[id] = false;
+
+      for (const TankCluster& cluster : eTankClusters.Get())
+      {
+         if (cluster.GetClusterTime() > 2000.0) //initial window
+            continue;
+            
+         for (const PMTHit& hit : cluster.GetHits())
+         {
+             double q = hit.GetPE();
+             int id   = hit.GetDetID();
+
+             auto it = passed.find(id);
+             if (it != passed.end() && q > 5)
+             {
+               it->second = true;
+             }
+         }
+      }
+
+      bool missing = false;
+      for (auto& kv : passed)
+      {
+        if (!kv.second)
+        {
+          missing = true;
+          break;
+        }
+      }
+
+      if (!missing) 
+         muonTopology = true;
+
+
+      //Cut 6: No hit in FMV
+      bool noVeto = false;
+      if (eventReader.NoVeto() == 1)
+         noVeto = true;
+ 
       //------------------------------------------------------------------------
  
  
@@ -299,40 +502,51 @@ void PlotTimestampMinusBeamgate(const char* fileName)
 
       
          // Fill histograms
-         if (passPairedEvent == 1)
+         if (isPairedEvent)
          {
             h0->Fill(dt_ns);
-
-            if (passPromptPMTCluster == 1)
+            if (hasClusterInPromptWindow)
             {
                h1->Fill(dt_ns);
-
-               if (passHighQualityPMTCluster == 1)
+               
+               if (highQualityCluster)
                {
                   h2->Fill(dt_ns);
-
-                  if (passMRDTrackReconstructed == 1)
+                  
+                  if (mrdTrackReconstructed)
                   {
                      h3->Fill(dt_ns);
-
-                     if (passTankMRDCoinc == 1)
+                     
+                     if (tankMRDCoinc)
                      {
                         h4->Fill(dt_ns);
-
-                        if (passMuonTopology == 1)
+                        
+                        if (muonTopology)
                         {
                            h5->Fill(dt_ns);
-
-                           if (passNoVeto == 1)
+                           
+                           if (noVeto)
                            {
                               h6->Fill(dt_ns);
+                              
                            }
+                              
+                           
                         }
+                           
+                        
+                         
+                        
                      }
+                        
+                          
                   }
+                  
                }
+            
             }
          }
+            
                  
           
       } //lappd number loop
@@ -448,6 +662,43 @@ void PlotTimestampMinusBeamgate(const char* fileName)
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+std::string GetBaseName(const std::string& fileName) {
+    size_t lastSlash = fileName.find_last_of("/\\");
+    std::string base = (lastSlash == std::string::npos) ? fileName : fileName.substr(lastSlash + 1);
+
+    size_t lastDot = base.find_last_of(".");
+    return (lastDot == std::string::npos) ? base : base.substr(0, lastDot);
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+bool IsHighQualityPMTCluster(const TankCluster* clusterPtrWithMaxPE) {
+    const std::vector<PMTHit>& hits = clusterPtrWithMaxPE->GetHits();
+    
+      
+    double sumQ = 0.0;
+    double sumQ2 = 0.0;
+    int N = hits.size();
+
+    if (N == 0) return false;
+
+   
+    for (const auto& hit : hits) {
+        double q = hit.GetQ();
+        sumQ += q;
+        sumQ2 += q * q;
+    }
+
+    double term = (sumQ2 / (sumQ * sumQ)) - (1.0 / N);
+    double qualityMetric = std::sqrt(term);
+
+   std::cout<<"CB1: "<<clusterPtrWithMaxPE->GetChargeBalance()<<std::endl;
+   std::cout<<"CB2: "<<qualityMetric<<std::endl;
+    return (qualityMetric < 0.2);
+}
+
+
 
 void GenerateTable
 (
@@ -644,4 +895,44 @@ std::string int128_to_string(__int128 value) {
     // Son haliyle string'i dondur
     return result;
 }
+
+
+
+
+void ReadChannels(const std::string& filename,
+                  std::vector<int>& verticalChannels,
+                  std::vector<int>& horizontalChannels)
+{
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "File cannot be opened!" << std::endl;
+        return;
+    }
+
+    std::string line;
+
+    // header'ı atla
+    std::getline(file, line);
+
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+
+        int channel_num;
+        int detector_system;
+        int orientation;
+
+        // sadece ilk 3 column'u oku
+        ss >> channel_num >> detector_system >> orientation;
+
+        if (orientation == 0) {
+            verticalChannels.push_back(channel_num);
+        }
+        else if (orientation == 1) {
+            horizontalChannels.push_back(channel_num);
+        }
+    }
+
+    file.close();
+}
+
 

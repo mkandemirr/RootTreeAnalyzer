@@ -5,17 +5,15 @@
 #include <algorithm>
 #include <fstream>
 #include <sstream>
-
 #include <TFile.h>
 #include <TTree.h>
+
 #include "ANNIEEventReader.h"
 #include "MCLAPPDHitReader.h"
 #include "LAPPDMetaReader.h"
 #include "TankClusterReader.h"
 #include "MRDClusterReader.h"
-#include "TPaveText.h"
 #include "RootTreeReader.h"
-
 #include "INIReader.h"
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
@@ -24,9 +22,12 @@ void ReadChannels(const std::string& filename,
                   std::vector<int>& verticalChannels,
                   std::vector<int>& horizontalChannels);
  
-
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+//This function is for muon topology cut
+void ReadLAPPDNeighborPMTIDs(const std::string& pmtListStr,
+                            std::vector<int>& lappdNeighborPMTIDs);
 
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......                
 void FilterCCEvent(const INIReader& iniReader);
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
@@ -51,6 +52,7 @@ int main(int argc, char* argv[])
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
 void FilterCCEvent(const INIReader& iniReader)
 {
    std::string inputFileName  = iniReader.Get("input",  "rootFile", "");
@@ -58,18 +60,23 @@ void FilterCCEvent(const INIReader& iniReader)
    std::string outputFileName = iniReader.Get("output", "rootFile", "");
    const bool useMC           = iniReader.GetBoolean("input", "useMC", false);
    
+   const std::string writeMode = iniReader.Get("output", "writeMode", "filtered");
+   const bool writeAnnotated = (writeMode == "annotated");
+   
    //data only
-   const bool cutRequireLAPPD      = iniReader.GetBoolean("cuts", "requireLAPPD", true);
-   const bool cutBeamOK                = (!useMC) && iniReader.GetBoolean("cuts", "beamOK", true);
+   const bool cutBeamOK                = (!useMC) && iniReader.GetBoolean("cuts", "beamOK", false);
    const bool cutBRFWindow             = (!useMC) && iniReader.GetBoolean("cuts", "brfWindow", false);
    const bool cutPPSMissing            = (!useMC) && iniReader.GetBoolean("cuts", "ppsMissing", false);
 
+   const double    ppsIntervalSec      = iniReader.GetReal("cuts", "ppsIntervalSec", 10);
+   
    //for both mc and data
-   const bool cutPairedEvent           = iniReader.GetBoolean("cuts", "pairedEvent", true);
-   const bool cutPromptPMTCluster      = iniReader.GetBoolean("cuts", "promptPMTCluster", true);
-   const bool cutHighQualityPMTCluster = iniReader.GetBoolean("cuts", "highQualityPMTCluster", true);
-   const bool cutMRDTrackReconstructed = iniReader.GetBoolean("cuts", "mrdTrackReconstructed", true);
-   const bool cutTankMRDCoinc          = iniReader.GetBoolean("cuts", "tankMRDCoinc", true);
+   const bool cutRequireLAPPD          = iniReader.GetBoolean("cuts", "requireLAPPD", false);
+   const bool cutPairedEvent           = iniReader.GetBoolean("cuts", "pairedEvent", false);
+   const bool cutPromptPMTCluster      = iniReader.GetBoolean("cuts", "promptPMTCluster", false);
+   const bool cutHighQualityPMTCluster = iniReader.GetBoolean("cuts", "highQualityPMTCluster", false);
+   const bool cutMRDTrackReconstructed = iniReader.GetBoolean("cuts", "mrdTrackReconstructed", false);
+   const bool cutTankMRDCoinc          = iniReader.GetBoolean("cuts", "tankMRDCoinc", false);
    const bool cutMuonTopology          = iniReader.GetBoolean("cuts", "muonTopology", false);
    const bool cutNoVeto                = iniReader.GetBoolean("cuts", "noVeto", false);
 
@@ -78,10 +85,10 @@ void FilterCCEvent(const INIReader& iniReader)
    const double mrdTimeWindow          = iniReader.GetReal("cutValues", "mrdTimeWindow", 30.0);
    const int    mrdMinSideHits         = iniReader.GetInteger("cutValues", "mrdMinSideHits", 2);
    const int    mrdMinTopHits          = iniReader.GetInteger("cutValues", "mrdMinTopHits", 2);
-   const double pmtPEThreshold         = iniReader.GetReal("cutValues", "pmtPEThreshold", 5.0);
-
    const double brfMin                 = iniReader.GetReal("cutValues", "brfMin", 5.0);
    const double brfMax                 = iniReader.GetReal("cutValues", "brfMax", 30.0);
+   const double lappdNeighborPMTPEThreshold = iniReader.GetReal("cutValues", "lappdNeighborPMTPEThreshold", 5.0);
+   std::string pmtListStr              = iniReader.Get("cutValues", "lappdNeighborPMTIDs", "");
 
    if (inputFileName.empty()) {
       std::cerr << "Error: input.rootFile is empty in config." << std::endl;
@@ -114,6 +121,32 @@ void FilterCCEvent(const INIReader& iniReader)
    TTree* outputTree = tree->CloneTree(0);
    outputTree->SetName("Event");
    outputTree->SetTitle("Filtered Event Tree");
+   
+   int passBeamOK                = -1;
+   int passBRFWindow             = -1;
+   int passPPSMissing            = -1;
+   int passRequireLAPPD          = -1;
+   int passPairedEvent           = -1;
+   int passPromptPMTCluster      = -1;
+   int passHighQualityPMTCluster = -1;
+   int passMRDTrackReconstructed = -1;
+   int passTankMRDCoinc          = -1;
+   int passMuonTopology          = -1;
+   int passNoVeto                = -1;
+
+   if (writeAnnotated) {
+      outputTree->Branch("passBeamOK",                &passBeamOK,                "passBeamOK/I");
+      outputTree->Branch("passBRFWindow",             &passBRFWindow,             "passBRFWindow/I");
+      outputTree->Branch("passPPSMissing",            &passPPSMissing,            "passPPSMissing/I");
+      outputTree->Branch("passRequireLAPPD",          &passRequireLAPPD,          "passRequireLAPPD/I");
+      outputTree->Branch("passPairedEvent",           &passPairedEvent,           "passPairedEvent/I");
+      outputTree->Branch("passPromptPMTCluster",      &passPromptPMTCluster,      "passPromptPMTCluster/I");
+      outputTree->Branch("passHighQualityPMTCluster", &passHighQualityPMTCluster, "passHighQualityPMTCluster/I");
+      outputTree->Branch("passMRDTrackReconstructed", &passMRDTrackReconstructed, "passMRDTrackReconstructed/I");
+      outputTree->Branch("passTankMRDCoinc",          &passTankMRDCoinc,          "passTankMRDCoinc/I");
+      outputTree->Branch("passMuonTopology",          &passMuonTopology,          "passMuonTopology/I");
+      outputTree->Branch("passNoVeto",                &passNoVeto,                "passNoVeto/I");
+   }
    
    Long64_t nEntries = tree->GetEntries();
    std::cout << "Number of events in this tree: " << nEntries << std::endl;
@@ -156,6 +189,10 @@ void FilterCCEvent(const INIReader& iniReader)
    ReadChannels(mrdInfoFile, sideMRDPMTs, topMRDPMTs);
    //std::cout << "Vertical size: " << sideMRDPMTs.size() << std::endl;
    //std::cout << "Horizontal size: " << topMRDPMTs.size() << std::endl;
+   
+   //For muon toplogy cut
+   std::vector<int> lappdNeighborPMTIDs;
+   ReadLAPPDNeighborPMTIDs(pmtListStr, lappdNeighborPMTIDs);
 
    
    for (Long64_t i = 0; i < nEntries; ++i) 
@@ -164,66 +201,80 @@ void FilterCCEvent(const INIReader& iniReader)
       
       tree->GetEntry(i);
       
+      bool requireLAPPD = true;
+      bool beamOK       = true;
+      bool brfWindow    = true;
+      bool noPPSMissing = true;
+      
       // ------------------------------------------------------------
-      // 1) Require LAPPD both for mc and  data
+      // 1) Require LAPPD both for MC and data
       // ------------------------------------------------------------
       if (cutRequireLAPPD) {
+
+         requireLAPPD = false;
 
          if (useMC) {
             EMCLAPPDHits eMCLAPPDHits;
             mcLAPPDHitReader.ReadEntry(i, eMCLAPPDHits);
 
-            if (eMCLAPPDHits.GetHits().empty()) 
-               continue;
+            if (!eMCLAPPDHits.GetHits().empty())
+               requireLAPPD = true;
          }
          else {
-            if (metaReader.mLAPPD_ID->empty()) 
-               continue;
+            if (!metaReader.mLAPPD_ID->empty())
+               requireLAPPD = true;
          }
       }
 
 
       // ------------------------------------------------------------
-      // 2) Data-only cuts,quality cuts
+      // 2) Data-only quality cuts
       // ------------------------------------------------------------
       if (!useMC) {
 
          // Beam OK
-         if (cutBeamOK && !beam_ok) {
-            continue;
+         if (cutBeamOK) {
+            beamOK = (beam_ok == 1);
          }
 
          // BRF window
          if (cutBRFWindow) {
             double brf_us = BRFFirstPeakFit / 1000.0;
-
-            if (brf_us < brfMin || brf_us > brfMax) {
-               continue;
-            }
+            brfWindow = (brf_us >= brfMin && brf_us <= brfMax);
          }
 
          
-         // PPS missing
+         // PPS missing tick.
+         // if ANY LAPPD has an unexpected PPS tick difference,
+         // the ENTIRE event is rejected. This is a hard cut.fix it later!
          if (cutPPSMissing) {
-            bool hasPPSMissing = false;
 
-            for (size_t j = 0; j < metaReader.mLAPPD_TSPPSMissing->size(); ++j) {
-               if (metaReader.mLAPPD_TSPPSMissing->at(j) != 0) {
-                  hasPPSMissing = true;
+            // 1 tick = 3.125 ns
+            const double tick_ns = 3.125;
+
+            // expected tick difference between PPS signals
+            const uint64_t expectedPPSDiff =
+              static_cast<uint64_t>((ppsIntervalSec * 1e9) / tick_ns);
+              
+            //std::cout<<"expectedPPSDiff: "<<expectedPPSDiff<<std::endl;
+
+            for (size_t j = 0; j < metaReader.mLAPPD_ID->size(); ++j) {
+
+               uint64_t before = metaReader.mLAPPD_TSPPSBefore->at(j);
+               uint64_t after  = metaReader.mLAPPD_TSPPSAfter->at(j);
+
+               uint64_t diff = after - before;
+
+               if (diff != expectedPPSDiff) {
+                  noPPSMissing = false;
                   break;
                }
             }
-
-            if (hasPPSMissing) {
-               continue;
-            }
+         
          }
       
       }
       
-      
- 
-  
       //------------------------------------------------------------------------
       // The belows are Event-level physics cuts
       ETankClusters eTankClusters;
@@ -340,30 +391,22 @@ void FilterCCEvent(const INIReader& iniReader)
       }
       
       
-      
-      
-      
       // Cut 4: In-time MRD coincidence
       bool tankMRDCoinc = false;
       if (eventReader.GetTankMRDCoinc() == 1)
          tankMRDCoinc = true;
       
       
-      
       //Cut 5: Muon topology cut
       bool muonTopology = false;
-      
-      //neigbors of lappd 39
-      std::vector<int> pmtIDs {462, 428, 406, 412};
-      //std::vector<int> pmtIDs {383, 389, 440, 441};
-
+            
       std::unordered_map<int, bool> passed;
-      for (int id : pmtIDs) 
+      for (int id : lappdNeighborPMTIDs) 
          passed[id] = false;
 
       for (const TankCluster& cluster : eTankClusters.Get())
       {
-         if (cluster.GetClusterTime() > 2000.0) //initial window
+         if (cluster.GetClusterTime() > promptWindowMax) //initial window
             continue;
             
          for (const PMTHit& hit : cluster.GetHits())
@@ -372,7 +415,7 @@ void FilterCCEvent(const INIReader& iniReader)
              int id   = hit.GetDetID();
 
              auto it = passed.find(id);
-             if (it != passed.end() && q > pmtPEThreshold)
+             if (it != passed.end() && q > lappdNeighborPMTPEThreshold)
              {
                it->second = true;
              }
@@ -393,55 +436,103 @@ void FilterCCEvent(const INIReader& iniReader)
          muonTopology = true;
 
 
-
       //Cut 6: No hit in FMV
       bool noVeto = false;
       if (eventReader.NoVeto() == 1)
          noVeto = true;
  
+ 
       //------------------------------------------------------------------------
  
- 
       bool passedAllCuts = true;
+      
+      if (cutBeamOK) {
+         passedAllCuts = passedAllCuts && beamOK;
+         passBeamOK = beamOK;
+      }
 
-      if (cutPairedEvent)
+      if (cutBRFWindow) {
+         passedAllCuts = passedAllCuts && brfWindow;
+         passBRFWindow = brfWindow;
+      }
+
+      if (cutPPSMissing) {
+         passedAllCuts = passedAllCuts && noPPSMissing;
+         passPPSMissing = noPPSMissing;
+      }
+
+      if (cutRequireLAPPD) {
+         passedAllCuts = passedAllCuts && requireLAPPD;
+         passRequireLAPPD = requireLAPPD;
+      }
+
+      if (cutPairedEvent) {
          passedAllCuts = passedAllCuts && isPairedEvent;
+         passPairedEvent = isPairedEvent;
+      }
 
-      if (cutPromptPMTCluster)
+      if (cutPromptPMTCluster) {
          passedAllCuts = passedAllCuts && hasClusterInPromptWindow;
+         passPromptPMTCluster = hasClusterInPromptWindow;
+      }
 
-      if (cutHighQualityPMTCluster)
+      if (cutHighQualityPMTCluster) {
          passedAllCuts = passedAllCuts && highQualityCluster;
+         passHighQualityPMTCluster = highQualityCluster;
+      }
 
-      if (cutMRDTrackReconstructed)
+      if (cutMRDTrackReconstructed) {
          passedAllCuts = passedAllCuts && mrdTrackReconstructed;
+         passMRDTrackReconstructed = mrdTrackReconstructed;
+      }
 
-      if (cutTankMRDCoinc)
+      if (cutTankMRDCoinc) {
          passedAllCuts = passedAllCuts && tankMRDCoinc;
+         passTankMRDCoinc = tankMRDCoinc;
+      }
 
-      if (cutMuonTopology)
+      if (cutMuonTopology) {
          passedAllCuts = passedAllCuts && muonTopology;
+         passMuonTopology = muonTopology;
+      }
 
-      if (cutNoVeto)
+      if (cutNoVeto) {
          passedAllCuts = passedAllCuts && noVeto;
+         passNoVeto = noVeto;
+      }
+
 
       //final
-      if (passedAllCuts) {
+      if (writeAnnotated) {
          outputTree->Fill();
+      }
+      else {
+         if (passedAllCuts) {
+            outputTree->Fill();
+         }
+      }
+
+      if (passedAllCuts) {
          ++nPassedEvents;
       }
     
-   
-   
- 
    }//event loop end
    
    outputFile->cd();
    outputTree->Write();
    outputFile->Close();
 
-   std::cout << "Number of events passing all cuts: " << nPassedEvents << std::endl;
-   std::cout << "Filtered tree written to: " << outputFileName << std::endl;
+   std::cout << "Total events: " << nEntries << std::endl;
+   std::cout << "Events passing all cuts: " << nPassedEvents << std::endl;
+
+   if (writeAnnotated) {
+      std::cout << "Mode: annotated (all events written with cut branches)" << std::endl;
+   }
+   else {
+      std::cout << "Mode: filtered (only events passing all cuts written)" << std::endl;
+   }
+
+   std::cout << "Output file: " << outputFileName << std::endl;
 
 
 }
@@ -483,5 +574,22 @@ void ReadChannels(const std::string& filename,
     }
 
     file.close();
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
+
+void ReadLAPPDNeighborPMTIDs(const std::string& pmtListStr,
+                std::vector<int>& lappdNeighborPMTIDs)
+{
+    std::stringstream ss(pmtListStr);
+    std::string item;
+
+    while (std::getline(ss, item, ',')) {
+        lappdNeighborPMTIDs.push_back(std::stoi(item));
+    }
+    
+   //for debug
+   //for (int id : lappdNeighborPMTIDs)
+   //   std::cout << "lappd neigbor id: "<<id << std::endl;
 }
 

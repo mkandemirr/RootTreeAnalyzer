@@ -119,7 +119,7 @@ void PlotLAPPDHit(const char* fileName)
             if (!hTubeTime) {
                 TString hname  = Form("hHitTime_LAPPD_%d", lappdID);
                 TString htitle = Form("LAPPD Hit Time - Tube %d;Time [ns];Counts/10 ns", lappdID);
-                hTubeTime = new TH1D(hname, htitle, 30, 0, 300.0);
+                hTubeTime = new TH1D(hname, htitle, 600, 0, 300.0);
                 hTubeTime->SetLineWidth(2);
             }
             hTubeTime->Fill(t);
