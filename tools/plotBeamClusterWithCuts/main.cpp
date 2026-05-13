@@ -120,7 +120,7 @@ void PlotTimestampMinusBeamgate(const char* fileName)
    
    int passBeamOK                = -1;
    int passBRFWindow             = -1;
-   int passPPSMissing            = -1;
+   int passMissingPPSTick            = -1;
    int passRequireLAPPD          = -1;
    int passPairedEvent           = -1;
    int passPromptPMTCluster      = -1;
@@ -132,7 +132,7 @@ void PlotTimestampMinusBeamgate(const char* fileName)
 
    tree->SetBranchAddress("passBeamOK",                &passBeamOK);
    tree->SetBranchAddress("passBRFWindow",             &passBRFWindow);
-   tree->SetBranchAddress("passPPSMissing",            &passPPSMissing);
+   tree->SetBranchAddress("passMissingPPSTick",        &passMissingPPSTick);
    tree->SetBranchAddress("passRequireLAPPD",          &passRequireLAPPD);
    tree->SetBranchAddress("passPairedEvent",           &passPairedEvent);
    tree->SetBranchAddress("passPromptPMTCluster",      &passPromptPMTCluster);
@@ -182,7 +182,7 @@ void PlotTimestampMinusBeamgate(const char* fileName)
       if (passBeamOK == 0)
          continue;
 
-      if (passPPSMissing == 0)
+      if (passMissingPPSTick == 0)
          continue;
          
       if (passBRFWindow == 0)

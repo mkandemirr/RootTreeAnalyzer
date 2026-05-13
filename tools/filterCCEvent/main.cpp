@@ -66,7 +66,7 @@ void FilterCCEvent(const INIReader& iniReader)
    //data only
    const bool cutBeamOK                = (!useMC) && iniReader.GetBoolean("cuts", "beamOK", false);
    const bool cutBRFWindow             = (!useMC) && iniReader.GetBoolean("cuts", "brfWindow", false);
-   const bool cutPPSMissing            = (!useMC) && iniReader.GetBoolean("cuts", "ppsMissing", false);
+   const bool cutMissingPPSTick        = (!useMC) && iniReader.GetBoolean("cuts", "missingPPSTick", false);
 
    const double    ppsIntervalSec      = iniReader.GetReal("cuts", "ppsIntervalSec", 10);
    
@@ -124,7 +124,7 @@ void FilterCCEvent(const INIReader& iniReader)
    
    int passBeamOK                = -1;
    int passBRFWindow             = -1;
-   int passPPSMissing            = -1;
+   int passMissingPPSTick            = -1;
    int passRequireLAPPD          = -1;
    int passPairedEvent           = -1;
    int passPromptPMTCluster      = -1;
@@ -137,7 +137,7 @@ void FilterCCEvent(const INIReader& iniReader)
    if (writeAnnotated) {
       outputTree->Branch("passBeamOK",                &passBeamOK,                "passBeamOK/I");
       outputTree->Branch("passBRFWindow",             &passBRFWindow,             "passBRFWindow/I");
-      outputTree->Branch("passPPSMissing",            &passPPSMissing,            "passPPSMissing/I");
+      outputTree->Branch("passMissingPPSTick",        &passMissingPPSTick,        "passMissingPPSTick/I");
       outputTree->Branch("passRequireLAPPD",          &passRequireLAPPD,          "passRequireLAPPD/I");
       outputTree->Branch("passPairedEvent",           &passPairedEvent,           "passPairedEvent/I");
       outputTree->Branch("passPromptPMTCluster",      &passPromptPMTCluster,      "passPromptPMTCluster/I");
@@ -204,7 +204,7 @@ void FilterCCEvent(const INIReader& iniReader)
       bool requireLAPPD = true;
       bool beamOK       = true;
       bool brfWindow    = true;
-      bool noPPSMissing = true;
+      bool noMissingPPSTick = true;
       
       // ------------------------------------------------------------
       // 1) Require LAPPD both for MC and data
@@ -247,7 +247,7 @@ void FilterCCEvent(const INIReader& iniReader)
          // PPS missing tick.
          // if ANY LAPPD has an unexpected PPS tick difference,
          // the ENTIRE event is rejected. This is a hard cut.fix it later!
-         if (cutPPSMissing) {
+         if (cutMissingPPSTick) {
 
             // 1 tick = 3.125 ns
             const double tick_ns = 3.125;
@@ -266,7 +266,7 @@ void FilterCCEvent(const INIReader& iniReader)
                uint64_t diff = after - before;
 
                if (diff != expectedPPSDiff) {
-                  noPPSMissing = false;
+                  noMissingPPSTick = false;
                   break;
                }
             }
@@ -456,9 +456,9 @@ void FilterCCEvent(const INIReader& iniReader)
          passBRFWindow = brfWindow;
       }
 
-      if (cutPPSMissing) {
-         passedAllCuts = passedAllCuts && noPPSMissing;
-         passPPSMissing = noPPSMissing;
+      if (cutMissingPPSTick) {
+         passedAllCuts = passedAllCuts && noMissingPPSTick;
+         passMissingPPSTick = noMissingPPSTick;
       }
 
       if (cutRequireLAPPD) {
